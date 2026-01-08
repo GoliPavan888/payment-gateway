@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Checkout</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 30px;
+    }
+    button {
+      margin: 10px 10px 10px 0;
+    }
+    input {
+      margin-right: 10px;
+    }
+  </style>
+</head>
+<body>
+
+<div data-test-id="checkout-container">
+
+  <!-- Order Summary -->
+  <div data-test-id="order-summary">
+    <h2>Complete Payment</h2>
+    <div>
+      <span>Amount: </span>
+      <span data-test-id="order-amount">₹0.00</span>
+    </div>
+    <div>
+      <span>Order ID: </span>
+      <span data-test-id="order-id"></span>
+    </div>
+  </div>
+
+  <!-- Payment Method Selection -->
+  <div data-test-id="payment-methods">
+    <button data-test-id="method-upi" onclick="showUPI()">UPI</button>
+    <button data-test-id="method-card" onclick="showCard()">Card</button>
+  </div>
+
+  <!-- UPI Form -->
+  <form data-test-id="upi-form" style="display:none">
+    <input
+      data-test-id="vpa-input"
+      placeholder="username@bank"
+      type="text"
+      required
+    />
+    <button data-test-id="pay-button" type="submit">Pay</button>
+  </form>
+
+  <!-- Card Form (not wired yet, UI only) -->
+  <form data-test-id="card-form" style="display:none">
+    <input data-test-id="card-number-input" placeholder="Card Number" />
+    <input data-test-id="expiry-input" placeholder="MM/YY" />
+    <input data-test-id="cvv-input" placeholder="CVV" />
+    <input data-test-id="cardholder-name-input" placeholder="Name on Card" />
+    <button data-test-id="pay-button" type="submit">Pay</button>
+  </form>
+
+  <!-- Processing -->
+  <div data-test-id="processing-state" style="display:none">
+    <span data-test-id="processing-message">Processing payment...</span>
+  </div>
+
+  <!-- Success -->
+  <div data-test-id="success-state" style="display:none">
+    <h2>Payment Successful!</h2>
+    <div>
+      Payment ID:
+      <span data-test-id="payment-id"></span>
+    </div>
+    <span data-test-id="success-message">
+      Your payment has been processed successfully
+    </span>
+  </div>
+
+  <!-- Error -->
+  <div data-test-id="error-state" style="display:none">
+    <h2>Payment Failed</h2>
+    <span data-test-id="error-message"></span>
+    <button data-test-id="retry-button" onclick="location.reload()">Try Again</button>
+  </div>
+
+</div>
+
+<script>
+/* =========================
+   GLOBALS
+========================= */
+const params = new URLSearchParams(window.location.search);
+const orderId = params.get("order_id");
+let paymentId = null;
+
+/* =========================
+   LOAD ORDER (PUBLIC)
+========================= */
+fetch(`http://localhost:8000/api/v1/orders/${orderId}/public`)
+  .then(res => {
+    if (!res.ok) throw new Error("Order fetch failed");
+    return res.json();
+  })
+  .then(order => {
+    document.querySelector('[data-test-id="order-id"]').innerText = order.id;
+    document.querySelector('[data-test-id="order-amount"]').innerText =
+      "₹" + (order.amount / 100).toFixed(2);
+  })
+  .catch(err => {
+    console.error(err);
+  });
+
+/* =========================
+   UI TOGGLES
+========================= */
+function showUPI() {
+  document.querySelector('[data-test-id="upi-form"]').style.display = "block";
+  document.querySelector('[data-test-id="card-form"]').style.display = "none";
+}
+
+function showCard() {
+  document.querySelector('[data-test-id="card-form"]').style.display = "block";
+  document.querySelector('[data-test-id="upi-form"]').style.display = "none";
+}
+
+/* =========================
+   UPI PAYMENT
+========================= */
+document.querySelector('[data-test-id="upi-form"]').addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  document.querySelector('[data-test-id="processing-state"]').style.display = "block";
+
+  const vpa = document.querySelector('[data-test-id="vpa-input"]').value;
+
+  const res = await fetch("http://localhost:8000/api/v1/payments/public", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      order_id: orderId,
+      method: "upi",
+      vpa: vpa
+    })
+  });
+
+  if (!res.ok) {
+    const txt = await res.text();
+    console.error("Payment creation failed:", txt);
+    showError("Payment could not be created");
+    return;
+  }
+
+  const data = await res.json();
+
+  if (!data.id) {
+    console.error("Missing payment ID", data);
+    showError("Invalid payment response");
+    return;
+  }
+
+  paymentId = data.id;
+  pollPaymentStatus();
+});
+
+/* =========================
+   POLLING
+========================= */
+function pollPaymentStatus() {
+  const interval = setInterval(async () => {
+    const res = await fetch(
+      `http://localhost:8000/api/v1/payments/${paymentId}/public`
+    );
+
+    if (!res.ok) return;
+
+    const payment = await res.json();
+
+    if (payment.status === "success") {
+      clearInterval(interval);
+      document.querySelector('[data-test-id="processing-state"]').style.display = "none";
+      document.querySelector('[data-test-id="success-state"]').style.display = "block";
+      document.querySelector('[data-test-id="payment-id"]').innerText = payment.id;
+    }
+
+    if (payment.status === "failed") {
+      clearInterval(interval);
+      showError(payment.error_description || "Payment failed");
+    }
+  }, 2000);
+}
+
+function showError(msg) {
+  document.querySelector('[data-test-id="processing-state"]').style.display = "none";
+  document.querySelector('[data-test-id="error-state"]').style.display = "block";
+  document.querySelector('[data-test-id="error-message"]').innerText = msg;
+}
+</script>
+
+</body>
+</html>
